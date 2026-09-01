@@ -378,7 +378,7 @@ async function toggleNotify(){
       }catch(_){}
       toast('알림을 껐습니다 🔕'); updateBell(); return;
     }
-    const name=await askText('이 기기 이름 (알림 구분용)','내 폰');
+    const name=await askText('기기 이름 — "일개미" 또는 "불개미"를 넣으면 상대방 대사만 알림이 와요','일개미 폰');
     if(name===null) return;
     const perm=await Notification.requestPermission();
     if(perm!=='granted'){toast('알림 권한이 거부되었습니다 — 브라우저 설정에서 허용해주세요');return;}
