@@ -142,6 +142,7 @@ const CFG = {
   }
 };
 let TOKEN = sessionStorage.getItem('gh_t') || null;
+let ROLE = sessionStorage.getItem('gh_r') || null;   // 비밀번호로 고정된 역할 (worker|fire)
 let curPost = null;        // {path, data}
 let editingId = null;      // 수정 중인 메시지 id (폴링 중단용)
 let menuId = null;         // 액션 메뉴가 열린 메시지 id
@@ -196,14 +197,24 @@ function askConfirm(title, okLabel){
 /* ================= 잠금/암호 ================= */
 async function unlock(pw){
   const cfg = await fetch('auth.enc.json?_='+Date.now(),{cache:'no-store'}).then(r=>r.json());
-  if(!cfg || !cfg.ct) throw new Error('NOSETUP');
+  const slots = cfg.slots || (cfg.ct ? [cfg] : []);
+  if(!slots.length) throw new Error('NOSETUP');
   const km = await crypto.subtle.importKey('raw', utf8enc(pw), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey(
-    {name:'PBKDF2', salt:b64decBytes(cfg.salt), iterations:cfg.iter||310000, hash:'SHA-256'},
-    km, {name:'AES-GCM', length:256}, false, ['decrypt']);
-  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv:b64decBytes(cfg.iv)}, key, b64decBytes(cfg.ct));
-  TOKEN = utf8dec(new Uint8Array(pt)).trim();
-  sessionStorage.setItem('gh_t', TOKEN);
+  for(const sl of slots){
+    try{
+      const key = await crypto.subtle.deriveKey(
+        {name:'PBKDF2', salt:b64decBytes(sl.salt), iterations:cfg.iter||sl.iter||310000, hash:'SHA-256'},
+        km, {name:'AES-GCM', length:256}, false, ['decrypt']);
+      const pt = utf8dec(new Uint8Array(await crypto.subtle.decrypt({name:'AES-GCM', iv:b64decBytes(sl.iv)}, key, b64decBytes(sl.ct)))).trim();
+      let token=pt, role=null;
+      if(pt.startsWith('{')){ const j=JSON.parse(pt); token=j.token; role=j.role||null; }
+      TOKEN=token; ROLE=role;
+      sessionStorage.setItem('gh_t', TOKEN);
+      if(ROLE){ sessionStorage.setItem('gh_r', ROLE); localStorage.setItem('antRole', ROLE); } else sessionStorage.removeItem('gh_r');
+      return;
+    }catch(_){ /* 이 슬롯의 비밀번호가 아님 → 다음 슬롯 */ }
+  }
+  throw new Error('WRONGPW');
 }
 
 /* ================= GitHub API ================= */
@@ -393,14 +404,15 @@ async function toggleNotify(){
       }catch(_){}
       toast('알림을 껐습니다 🔕'); updateBell(); return;
     }
-    const name=await askText('기기 이름 — "일개미" 또는 "불개미"를 넣으면 상대방 대사만 알림이 와요','일개미 폰');
-    if(name===null) return;
+    let name;
+    if(ROLE){ name=CFG.roles[ROLE].name+' 기기'; }
+    else { name=await askText('기기 이름 — "일개미" 또는 "불개미"를 넣으면 상대방 대사만 알림이 와요','일개미 폰'); if(name===null) return; }
     const perm=await Notification.requestPermission();
     if(perm!=='granted'){toast('알림 권한이 거부되었습니다 — 브라우저 설정에서 허용해주세요');return;}
     sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlB64ToUint8(CFG.vapidPublicKey)});
     const p=`data/push/${deviceId()}.json`;
     const cur=await getJson(p).catch(()=>null);
-    await putJson(p,{id:deviceId(),name:(name.trim()||'기기'),sub:sub.toJSON()},cur&&cur.sha,'push: subscribe '+(name.trim()||'기기'));
+    await putJson(p,{id:deviceId(),name:(name.trim()||'기기'),role:ROLE||null,sub:sub.toJSON()},cur&&cur.sha,'push: subscribe '+(name.trim()||'기기'));
     toast('알림이 켜졌습니다 🔔 상대방 대사가 오면 알려드려요');
     updateBell();
   }catch(e){toast('알림 설정 실패: '+e.message);}
@@ -432,10 +444,12 @@ async function openPost(id){
   $('#delPostBtn').onclick = deleteCurPost;
 
   // 역할 토글
-  let role = localStorage.getItem('antRole')||'worker';
+  let role = ROLE || localStorage.getItem('antRole') || 'worker';
   const drawRole=()=>{ $('#roleWorker').classList.toggle('on',role==='worker'); $('#roleFire').classList.toggle('on',role==='fire'); };
-  $('#roleWorker').onclick=()=>{role='worker';localStorage.setItem('antRole',role);drawRole();$('#msgInput').focus();};
-  $('#roleFire').onclick=()=>{role='fire';localStorage.setItem('antRole',role);drawRole();$('#msgInput').focus();};
+  const pick=r=>{ if(ROLE && r!==ROLE){ toast('이 비밀번호로는 '+CFG.roles[ROLE].name+' 대사만 입력할 수 있어요'); return; } role=r; localStorage.setItem('antRole',role); drawRole(); $('#msgInput').focus(); };
+  $('#roleWorker').onclick=()=>pick('worker');
+  $('#roleFire').onclick=()=>pick('fire');
+  if(ROLE){ $(ROLE==='worker'?'#roleFire':'#roleWorker').style.display='none'; }   // 역할 고정 → 상대 역할 버튼 숨김
   drawRole();
 
   // 입력창
