@@ -47,6 +47,8 @@ textarea,input{font-family:inherit}
 .top .ttl{font-size:17px;font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .top .back{color:#fff;font-size:22px;padding:4px 8px 4px 0}
 .top .edit-title{color:#9AA3B2;font-size:15px;padding:4px 6px}
+.top .del-post{color:#9AA3B2;font-size:15px;padding:4px 6px}
+.modal .btns .danger{background:#C93A2F;color:#fff}
 .status{font-size:11px;color:#9AA3B2;white-space:nowrap}
 .bell{font-size:19px;padding:4px 8px;opacity:.45;filter:grayscale(1);transition:all .15s}
 .bell.on{opacity:1;filter:none}
@@ -175,6 +177,19 @@ function askText(title, def){
     bg.addEventListener('click',e=>{if(e.target===bg)done(null);});
     inp.addEventListener('keydown',e=>{if(e.key==='Enter')done(inp.value);if(e.key==='Escape')done(null);});
     inp.focus();inp.select();
+  });
+}
+/* 확인 모달 (삭제 등) */
+function askConfirm(title, okLabel){
+  return new Promise(resolve=>{
+    const bg=document.createElement('div');
+    bg.className='modal-bg';
+    bg.innerHTML=`<div class="modal"><h3>${esc(title)}</h3><div class="btns"><button class="no">취소</button><button class="danger">${esc(okLabel||'삭제')}</button></div></div>`;
+    document.body.appendChild(bg);
+    const done=v=>{bg.remove();resolve(v);};
+    bg.querySelector('.danger').onclick=()=>done(true);
+    bg.querySelector('.no').onclick=()=>done(false);
+    bg.addEventListener('click',e=>{if(e.target===bg)done(false);});
   });
 }
 
@@ -400,6 +415,7 @@ async function openPost(id){
     <button class="back" id="backBtn">‹</button>
     <div class="ttl" id="postTitle">불러오는 중…</div>
     <button class="edit-title" id="renameBtn" title="제목 수정">✎</button>
+    <button class="del-post" id="delPostBtn" title="대본 삭제">🗑</button>
     <span class="status" id="status"></span>
   </div>
   <div class="chat" id="chatArea"></div>
@@ -413,6 +429,7 @@ async function openPost(id){
   </div>`;
   $('#backBtn').onclick = ()=>{location.hash='#/';};
   $('#renameBtn').onclick = renameCur;
+  $('#delPostBtn').onclick = deleteCurPost;
 
   // 역할 토글
   let role = localStorage.getItem('antRole')||'worker';
@@ -518,6 +535,21 @@ document.addEventListener('click', async e=>{
   }
 });
 
+async function deleteCurPost(){
+  if(!curPost) return;
+  const ok=await askConfirm(`"${curPost.data.title}" 대본을 삭제할까요?\n삭제해도 기록은 남아 있어 복구를 요청할 수 있습니다.`);
+  if(!ok) return;
+  setStatus('saving','삭제 중…');
+  try{
+    const p=postPath(curPost.id);
+    const cur=await getJson(p);
+    if(cur) await gh(p,{method:'DELETE',body:{message:'del post: '+curPost.data.title,sha:cur.sha,branch:CFG.branch}});
+    const delId=curPost.id;
+    await mutate('data/index.json',d=>{d.posts=(d.posts||[]).filter(x=>x.id!==delId);},'index: del post',{posts:[]});
+    toast('대본을 삭제했습니다');
+    location.hash='#/';
+  }catch(e){setStatus('error','삭제 실패');toast('삭제 실패: '+e.message);}
+}
 async function renameCur(){
   if(!curPost) return;
   const t=await askText('제목 수정', curPost.data.title);
