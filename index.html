@@ -470,27 +470,41 @@ async function renameCur(){
   $('#postTitle').textContent=curPost.data.title;
 }
 
-/* ================= 폴링(다른 기기 동기화) ================= */
+/* ================= 폴링(다른 기기 준실시간 동기화) =================
+   3.5초 간격 + ETag 조건부 요청 — 변경 없으면 304로 응답하며
+   GitHub 호출 한도에 계산되지 않아 상시 폴링해도 무료 한도에 부담 없음 */
+const etags = {};
+async function pollJson(path){
+  const r = await fetch(`${CFG.api}/repos/${CFG.dataRepo}/contents/${path}?ref=${CFG.branch}`,{
+    cache:'no-store',
+    headers: Object.assign({Authorization:'Bearer '+TOKEN, Accept:'application/vnd.github+json'},
+                           etags[path]?{'If-None-Match':etags[path]}:{})
+  });
+  if(r.status===304) return null;              // 변경 없음
+  if(r.status===401){sessionStorage.removeItem('gh_t');TOKEN=null;route();return null;}
+  if(!r.ok) return null;
+  etags[path]=r.headers.get('ETag');
+  const j=await r.json();
+  return {data: JSON.parse(utf8dec(b64decBytes(j.content))), sha:j.sha};
+}
+function applyPolled(id, got){
+  if(got && curPost && curPost.id===id && JSON.stringify(got.data)!==JSON.stringify(curPost.data)){
+    curPost={id,data:got.data};
+    const t=$('#postTitle'); if(t) t.textContent=got.data.title;
+    renderChat();
+  }
+}
 function startPoll(id){
   stopPoll();
   pollTimer=setInterval(async()=>{
     if(document.hidden||editingId) return;
-    try{
-      const got=await getJson(postPath(id));
-      if(got && curPost && curPost.id===id && JSON.stringify(got.data)!==JSON.stringify(curPost.data)){
-        curPost={id,data:got.data};
-        $('#postTitle').textContent=got.data.title;
-        renderChat();
-      }
-    }catch(_){}
-  },20000);
+    try{ applyPolled(id, await pollJson(postPath(id))); }catch(_){}
+  },3500);
 }
 function stopPoll(){if(pollTimer){clearInterval(pollTimer);pollTimer=null;}}
 document.addEventListener('visibilitychange',()=>{
   if(!document.hidden && curPost && !editingId){
-    getJson(postPath(curPost.id)).then(got=>{
-      if(got&&curPost&&JSON.stringify(got.data)!==JSON.stringify(curPost.data)){curPost={id:curPost.id,data:got.data};renderChat();}
-    }).catch(()=>{});
+    pollJson(postPath(curPost.id)).then(got=>applyPolled(curPost.id, got)).catch(()=>{});
   }
 });
 
