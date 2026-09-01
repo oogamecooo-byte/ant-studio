@@ -101,6 +101,17 @@ textarea,input{font-family:inherit}
 
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 100px);background:rgba(30,36,48,.92);color:#fff;font-size:13px;padding:10px 18px;border-radius:20px;z-index:50;opacity:0;transition:opacity .25s;pointer-events:none}
 .toast.show{opacity:1}
+
+/* ---------- 입력 모달 ---------- */
+.modal-bg{position:fixed;inset:0;background:rgba(20,24,32,.55);z-index:100;display:flex;align-items:center;justify-content:center;padding:24px}
+.modal{background:#fff;border-radius:18px;padding:20px;width:100%;max-width:360px;box-shadow:0 10px 40px rgba(0,0,0,.35)}
+.modal h3{margin:0 0 14px;font-size:16px}
+.modal input{width:100%;border:2px solid var(--line);border-radius:12px;padding:11px 14px;font-size:15px;outline:none}
+.modal input:focus{border-color:var(--accent)}
+.modal .btns{display:flex;gap:8px;margin-top:14px;justify-content:flex-end}
+.modal .btns button{padding:10px 18px;border-radius:12px;font-size:14px;font-weight:600}
+.modal .btns .ok{background:var(--accent);color:#fff}
+.modal .btns .no{background:#EFEAE0;color:var(--ink)}
 </style>
 </head>
 <body>
@@ -138,6 +149,22 @@ function fmtTime(iso){const d=new Date(iso);const h=d.getHours(),m=String(d.getM
 function fmtDay(iso){const d=new Date(iso);return d.getFullYear()+'년 '+(d.getMonth()+1)+'월 '+d.getDate()+'일 '+['일','월','화','수','목','금','토'][d.getDay()]+'요일';}
 function fmtRel(iso){const s=(Date.now()-new Date(iso).getTime())/1000;if(s<60)return'방금';if(s<3600)return Math.floor(s/60)+'분 전';if(s<86400)return Math.floor(s/3600)+'시간 전';if(s<172800)return'어제';const d=new Date(iso);return(d.getMonth()+1)+'월 '+d.getDate()+'일';}
 function setStatus(kind,txt){const el=$('#status');if(!el)return;el.className='status '+kind;el.textContent=txt;}
+/* prompt() 대체 — 환경 안 타는 자체 입력 모달 */
+function askText(title, def){
+  return new Promise(resolve=>{
+    const bg=document.createElement('div');
+    bg.className='modal-bg';
+    bg.innerHTML=`<div class="modal"><h3>${esc(title)}</h3><input id="mdIn" value="${esc(def||'')}"><div class="btns"><button class="no">취소</button><button class="ok">확인</button></div></div>`;
+    document.body.appendChild(bg);
+    const inp=bg.querySelector('#mdIn');
+    const done=v=>{bg.remove();resolve(v);};
+    bg.querySelector('.ok').onclick=()=>done(inp.value);
+    bg.querySelector('.no').onclick=()=>done(null);
+    bg.addEventListener('click',e=>{if(e.target===bg)done(null);});
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')done(inp.value);if(e.key==='Escape')done(null);});
+    inp.focus();inp.select();
+  });
+}
 
 /* ================= 잠금/암호 ================= */
 async function unlock(pw){
@@ -295,7 +322,7 @@ async function renderBoard(){
 }
 async function newPost(){
   const d=new Date();
-  const title = prompt('대본 제목을 입력하세요', d.getMonth()+1+'월 '+d.getDate()+'일 대본');
+  const title = await askText('대본 제목을 입력하세요', d.getMonth()+1+'월 '+d.getDate()+'일 대본');
   if(title===null) return;
   const id=newId(), now=new Date().toISOString();
   const post={id, title:title.trim()||'제목 없음', created:now, updated:now, messages:[]};
@@ -437,7 +464,7 @@ document.addEventListener('click', async e=>{
 
 async function renameCur(){
   if(!curPost) return;
-  const t=prompt('제목 수정', curPost.data.title);
+  const t=await askText('제목 수정', curPost.data.title);
   if(t===null||!t.trim()) return;
   await mutatePost(curPost.id,p=>{p.title=t.trim();},'rename').catch(()=>{});
   $('#postTitle').textContent=curPost.data.title;
