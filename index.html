@@ -48,6 +48,8 @@ textarea,input{font-family:inherit}
 .top .back{color:#fff;font-size:22px;padding:4px 8px 4px 0}
 .top .edit-title{color:#9AA3B2;font-size:15px;padding:4px 6px}
 .status{font-size:11px;color:#9AA3B2;white-space:nowrap}
+.bell{font-size:19px;padding:4px 8px;opacity:.45;filter:grayscale(1);transition:all .15s}
+.bell.on{opacity:1;filter:none}
 .status.saving{color:#FFD54F}.status.error{color:#FF8A80}.status.saved{color:#81C784}
 
 /* ---------- 게시판 ---------- */
@@ -131,6 +133,7 @@ const CFG = {
   dataRepo: 'oogamecooo-byte/ant-studio-data',
   branch: 'main',
   api: 'https://api.github.com',
+  vapidPublicKey: 'BB_i3L4fEw5QFlXLDbU-h3yQCGg-QInTNPJk6eANSkVBrOKUEPl7bc7oTOOGOtARsbAEBiRTLxF83-0AKgAqCDQ',
   roles: {
     worker: {name:'일개미', img:'assets/ant-worker.png'},
     fire:   {name:'불개미', img:'assets/ant-fire.png'}
@@ -151,6 +154,8 @@ function b64decBytes(b64){const bin=atob(String(b64).replace(/\s/g,''));const u=
 const utf8enc = s => new TextEncoder().encode(s);
 const utf8dec = b => new TextDecoder().decode(b);
 const newId = () => Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+function deviceId(){let d=localStorage.getItem('antDev');if(!d){d=newId();localStorage.setItem('antDev',d);}return d;}
+function urlB64ToUint8(s){const pad='='.repeat((4-s.length%4)%4);const b=(s+pad).replace(/-/g,'+').replace(/_/g,'/');const raw=atob(b);const u=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)u[i]=raw.charCodeAt(i);return u;}
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('show');clearTimeout(t._h);t._h=setTimeout(()=>t.classList.remove('show'),2200);}
 function fmtTime(iso){const d=new Date(iso);const h=d.getHours(),m=String(d.getMinutes()).padStart(2,'0');return (h<12?'오전 ':'오후 ')+((h%12)||12)+':'+m;}
 function fmtDay(iso){const d=new Date(iso);return d.getFullYear()+'년 '+(d.getMonth()+1)+'월 '+d.getDate()+'일 '+['일','월','화','수','목','금','토'][d.getDay()]+'요일';}
@@ -305,11 +310,14 @@ async function renderBoard(){
   <div class="top">
     <span class="ants"><img src="assets/ant-worker.png" alt=""><img src="assets/ant-fire.png" alt=""></span>
     <div class="ttl">개미 대본실</div>
+    <button class="bell" id="bellBtn" title="새 대사 알림">🔔</button>
     <span class="status" id="status"></span>
   </div>
   <div class="board" id="boardList"><div class="hint">불러오는 중…</div></div>
   <button class="fab" id="newBtn">＋ 새로 만들기</button>`;
   $('#newBtn').onclick = newPost;
+  $('#bellBtn').onclick = toggleNotify;
+  updateBell();
   try{
     const idx = await getJson('data/index.json');
     const posts = idx ? (idx.data.posts||[]) : [];
@@ -341,6 +349,47 @@ async function newPost(){
   }catch(e){ toast('생성 실패: '+e.message); }
 }
 function setStatusSafe(k,t){try{setStatus(k,t)}catch(_){}}
+
+/* ================= 푸시 알림 ================= */
+function pushSupported(){return 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification!=='undefined';}
+async function updateBell(){
+  const b=$('#bellBtn'); if(!b) return;
+  try{
+    if(!pushSupported()){b.classList.remove('on');return;}
+    const reg=await navigator.serviceWorker.ready;
+    const sub=await reg.pushManager.getSubscription();
+    b.classList.toggle('on', !!sub && Notification.permission==='granted');
+  }catch(_){b.classList.remove('on');}
+}
+async function toggleNotify(){
+  if(!pushSupported()){
+    toast('이 브라우저는 알림을 지원하지 않습니다. 아이폰은 홈 화면에 설치한 앱에서만 가능합니다.');
+    return;
+  }
+  try{
+    const reg=await navigator.serviceWorker.ready;
+    let sub=await reg.pushManager.getSubscription();
+    if(sub){
+      await sub.unsubscribe();
+      try{
+        const p=`data/push/${deviceId()}.json`;
+        const cur=await getJson(p);
+        if(cur) await gh(p,{method:'DELETE',body:{message:'push: unsubscribe',sha:cur.sha,branch:CFG.branch}});
+      }catch(_){}
+      toast('알림을 껐습니다 🔕'); updateBell(); return;
+    }
+    const name=await askText('이 기기 이름 (알림 구분용)','내 폰');
+    if(name===null) return;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted'){toast('알림 권한이 거부되었습니다 — 브라우저 설정에서 허용해주세요');return;}
+    sub=await reg.pushManager.subscribe({userVisibleOnly:true, applicationServerKey:urlB64ToUint8(CFG.vapidPublicKey)});
+    const p=`data/push/${deviceId()}.json`;
+    const cur=await getJson(p).catch(()=>null);
+    await putJson(p,{id:deviceId(),name:(name.trim()||'기기'),sub:sub.toJSON()},cur&&cur.sha,'push: subscribe '+(name.trim()||'기기'));
+    toast('알림이 켜졌습니다 🔔 상대방 대사가 오면 알려드려요');
+    updateBell();
+  }catch(e){toast('알림 설정 실패: '+e.message);}
+}
 
 /* ================= 화면: 채팅(대본) ================= */
 async function openPost(id){
@@ -386,7 +435,7 @@ async function openPost(id){
     const text=inp.value.trim(); if(!text)return;
     inp.value=''; inp.style.height='auto'; sendBtn.disabled=true;
     // 낙관적 렌더
-    const m={id:newId(), role, text, ts:new Date().toISOString()};
+    const m={id:newId(), role, text, ts:new Date().toISOString(), dev:deviceId()};
     if(curPost){curPost.data.messages.push(m); renderChat();}
     try{ await mutatePost(id, p=>{ if(!p.messages.some(x=>x.id===m.id)) p.messages.push(m); }, 'msg: '+CFG.roles[role].name); renderChat(); }
     catch(_){ /* 상태표시가 알림 */ }
